@@ -12,6 +12,7 @@ import {
   ChevronUp
 } from 'lucide-react';
 import { Trade } from '../types';
+import { jsPDF } from 'jspdf';
 
 interface TradeListProps {
   trades: Trade[];
@@ -49,7 +50,7 @@ export default function TradeList({ trades, onEditTrade, onDeleteTrade, usdToBrl
     setExpandedTradeId(expandedTradeId === id ? null : id);
   };
 
-  // CSV Export Utility
+  // High reliability CSV Export Utility with UTF-8 BOM for Excel support
   const exportToCSV = () => {
     const headers = [
       'ID', 'Fecha', 'Hora', 'Plataforma', 'Mercado', 'Activo', 'Tipo Activo', 'Lado', 'Timeframe',
@@ -63,21 +64,177 @@ export default function TradeList({ trades, onEditTrade, onDeleteTrade, usdToBrl
       t.financialResult, t.currency, t.percentResult, t.emotionBefore, t.confidenceBefore, t.observations
     ]);
 
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + [headers.join(','), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))].join('\n');
-      
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `diario_de_trading_completo_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const csvContent = [
+      headers.join(','), 
+      ...rows.map(e => e.map(val => `"${String(val ?? '').replace(/"/g, '""')}"`).join(','))
+    ].join('\n');
+    
+    try {
+      // Add UTF-8 BOM so Excel decodes accents and special characters correctly
+      const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `diario_de_trading_completo_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Error exporting to CSV:", err);
+    }
   };
 
-  // Simple Print trigger
-  const triggerPrint = () => {
-    window.print();
+  // High-reliability PDF export using jsPDF (works perfectly inside iframes)
+  const exportToPDF = () => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+
+      // Modern dark header
+      doc.setFillColor(24, 24, 27); // zinc-900
+      doc.rect(0, 0, pageWidth, 35, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text('DIARIO DE TRADING - REPORTE DE OPERACIONES', 15, 15);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(156, 163, 175); // zinc-400
+      doc.text(`Generado el: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}  |  Total Operaciones: ${filteredTrades.length}`, 15, 22);
+      doc.text(`Tipo de Cambio Referencia: 1 USD = ${usdToBrlRate.toFixed(2)} BRL`, 15, 27);
+
+      let y = 45;
+
+      // Stats Summary Bar
+      const totalTrades = filteredTrades.length;
+      const winTrades = filteredTrades.filter(t => t.financialResult > 0).length;
+      const winRate = totalTrades > 0 ? Math.round((winTrades / totalTrades) * 100) : 0;
+      
+      const totalBRL = filteredTrades.reduce((sum, t) => {
+        const val = t.currency === 'BRL' ? t.financialResult : t.financialResult * usdToBrlRate;
+        return sum + val;
+      }, 0);
+
+      doc.setFillColor(244, 244, 245); // zinc-100
+      doc.rect(15, y, pageWidth - 30, 18, 'F');
+
+      doc.setTextColor(63, 63, 70); // zinc-600
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.text('OPERACIONES', 20, y + 6);
+      doc.text('TASA DE ACIERTO (WIN RATE)', 75, y + 6);
+      doc.text('BALANCE ACUMULADO (BRL)', 135, y + 6);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(24, 24, 27);
+      doc.text(`${totalTrades}`, 20, y + 13);
+      
+      if (totalTrades > 0) {
+        if (winRate >= 50) doc.setTextColor(16, 185, 129); // green
+        else doc.setTextColor(220, 38, 38); // red
+      }
+      doc.text(`${winRate}%`, 75, y + 13);
+
+      if (totalBRL >= 0) doc.setTextColor(16, 185, 129);
+      else doc.setTextColor(220, 38, 38);
+      doc.text(`R$ ${totalBRL.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 135, y + 13);
+
+      y += 28;
+
+      // Table Header
+      doc.setFillColor(39, 39, 42); // zinc-800
+      doc.rect(15, y, pageWidth - 30, 8, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.text('FECHA', 18, y + 5.5);
+      doc.text('ACTIVO', 38, y + 5.5);
+      doc.text('LADO', 65, y + 5.5);
+      doc.text('ESTRATEGIA', 85, y + 5.5);
+      doc.text('MULT. R', 135, y + 5.5);
+      doc.text('RESULTADO', 165, y + 5.5);
+
+      y += 8;
+
+      // Rows
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+
+      filteredTrades.forEach((t, index) => {
+        // Page boundary check
+        if (y > pageHeight - 15) {
+          doc.addPage();
+          y = 20;
+
+          // Redraw simplified header on new page
+          doc.setFillColor(39, 39, 42);
+          doc.rect(15, y, pageWidth - 30, 8, 'F');
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'bold');
+          doc.text('FECHA', 18, y + 5.5);
+          doc.text('ACTIVO', 38, y + 5.5);
+          doc.text('LADO', 65, y + 5.5);
+          doc.text('ESTRATEGIA', 85, y + 5.5);
+          doc.text('MULT. R', 135, y + 5.5);
+          doc.text('RESULTADO', 165, y + 5.5);
+          
+          y += 8;
+          doc.setFont('helvetica', 'normal');
+        }
+
+        // Alternating background
+        if (index % 2 === 0) {
+          doc.setFillColor(250, 250, 250);
+          doc.rect(15, y, pageWidth - 30, 7.5, 'F');
+        }
+
+        doc.setTextColor(39, 39, 42);
+        doc.text(t.date, 18, y + 5);
+        doc.text(t.asset, 38, y + 5);
+
+        // Lado
+        if (t.side === 'Compra') doc.setTextColor(16, 185, 129);
+        else doc.setTextColor(220, 38, 38);
+        doc.text(t.side, 65, y + 5);
+
+        // Strategy
+        doc.setTextColor(39, 39, 42);
+        const stratShort = t.strategy.length > 28 ? t.strategy.substring(0, 26) + '..' : t.strategy;
+        doc.text(stratShort, 85, y + 5);
+
+        // R Multiple
+        if (t.rMultiple >= 0) doc.setTextColor(16, 185, 129);
+        else doc.setTextColor(220, 38, 38);
+        doc.text(`${t.rMultiple >= 0 ? '+' : ''}${t.rMultiple.toFixed(1)} R`, 135, y + 5);
+
+        // Result
+        if (t.financialResult >= 0) doc.setTextColor(16, 185, 129);
+        else doc.setTextColor(220, 38, 38);
+        
+        const prefixResult = t.financialResult >= 0 ? '+' : '';
+        const symbolResult = t.currency === 'BRL' ? 'R$' : '$';
+        doc.text(`${prefixResult}${symbolResult} ${t.financialResult.toLocaleString('pt-BR')}`, 165, y + 5);
+
+        y += 7.5;
+      });
+
+      doc.save(`diario_trading_reporte_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      // Fallback to window.print() if jsPDF encounters unexpected failure
+      window.print();
+    }
   };  return (
     <div id="trade-list-view" className="p-4 space-y-4 overflow-y-auto h-screen w-full bg-zinc-950 text-zinc-100 font-sans">
       
@@ -101,11 +258,11 @@ export default function TradeList({ trades, onEditTrade, onDeleteTrade, usdToBrl
           
           <button
             id="btn-print-report"
-            onClick={triggerPrint}
+            onClick={exportToPDF}
             className="flex items-center space-x-1.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 font-bold px-3 py-1.5 rounded transition text-xs font-mono"
           >
             <Printer className="h-3.5 w-3.5 text-blue-400" />
-            <span>IMPRIMIR PDF</span>
+            <span>DESCARGAR PDF</span>
           </button>
         </div>
       </div>

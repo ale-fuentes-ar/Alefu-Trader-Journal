@@ -274,12 +274,12 @@ app.get('/api/backups', (req, res) => {
   }
 });
 
-app.post('/api/backups/create', (req, res) => {
+app.post(['/api/backups/create', '/api/backup'], (req, res) => {
   try {
     const backupName = `manual-backup-${Date.now()}.json`;
     const backupPath = path.join(BACKUP_DIR, backupName);
     fs.writeFileSync(backupPath, JSON.stringify(tradesList, null, 2), 'utf-8');
-    res.json({ success: true, filename: backupName });
+    res.json({ success: true, filename: backupName, file: backupName });
   } catch (err) {
     res.status(500).json({ error: 'Failed to create manual backup' });
   }
@@ -303,17 +303,19 @@ app.post('/api/backups/restore', (req, res) => {
 
 // AI Copilot Endpoint using GoogleGenAI
 app.post('/api/ai/chat', async (req, res) => {
-  const { messages } = req.body;
+  const { messages, customApiKey } = req.body;
   
-  if (!process.env.GEMINI_API_KEY) {
+  const apiKey = customApiKey || process.env.GEMINI_API_KEY;
+  
+  if (!apiKey) {
     return res.status(400).json({ 
-      error: 'La clave GEMINI_API_KEY no está configurada. Actívala en el panel de Secrets de AI Studio.' 
+      error: 'La clave GEMINI_API_KEY no está configurada. Actívala en el panel de Secrets de AI Studio, o configúrala en la interfaz.' 
     });
   }
 
   try {
     const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+      apiKey: apiKey,
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build'

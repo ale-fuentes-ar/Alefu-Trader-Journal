@@ -218,10 +218,11 @@ export default function App() {
   // Trigger manual Backup
   const handleManualBackup = async () => {
     try {
-      const res = await fetch('/api/backup', { method: 'POST' });
+      const res = await fetch('/api/backups/create', { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        setBackupMsg(`Copia de seguridad guardada con éxito: ${data.file}`);
+        const fname = data.filename || data.file || 'manual-backup.json';
+        setBackupMsg(`Copia de seguridad guardada con éxito: ${fname}`);
         setTimeout(() => setBackupMsg(null), 4000);
       } else {
         setBackupMsg('Fallo al crear la copia de seguridad.');
@@ -229,6 +230,8 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
+      setBackupMsg('Fallo al crear la copia de seguridad.');
+      setTimeout(() => setBackupMsg(null), 4000);
     }
   };
 
