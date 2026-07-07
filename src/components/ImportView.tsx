@@ -56,42 +56,157 @@ export default function ImportView({ onImportComplete, onClearAllTrades, usdToBr
       const timestampNow = new Date().toISOString();
 
       if (importPlatform === 'ProfitPRO') {
-        // Simple CSV parser
         const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         if (lines.length < 2) {
           throw new Error('El archivo CSV está vacío o no contiene suficientes líneas.');
         }
 
-        // Detect headers
-        const headers = lines[0].toLowerCase().split(',');
-        const dateIdx = headers.indexOf('fecha');
-        const timeIdx = headers.indexOf('hora');
-        const assetIdx = headers.indexOf('activo');
-        const opIdx = headers.indexOf('operacion');
-        const sizeIdx = headers.indexOf('contratos');
-        const pointsIdx = headers.indexOf('puntos');
-        const resultIdx = headers.indexOf('resultado_brl');
-
-        if (assetIdx === -1 || resultIdx === -1) {
-          throw new Error('Faltan columnas obligatorias (Activo, Resultado_BRL) en el CSV.');
+        // Find the actual header line index
+        let headerLineIdx = -1;
+        for (let i = 0; i < lines.length; i++) {
+          const lowerLine = lines[i].toLowerCase();
+          if (
+            lowerLine.includes('ativo') || 
+            lowerLine.includes('activo') || 
+            lowerLine.includes('fecha') || 
+            lowerLine.includes('abertura')
+          ) {
+            headerLineIdx = i;
+            break;
+          }
         }
 
-        for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(',');
-          const assetName = cols[assetIdx]?.toUpperCase() || 'WIN';
-          const financialRes = Number(cols[resultIdx]) || 0;
+        if (headerLineIdx === -1) {
+          throw new Error('No se encontró la cabecera del reporte (buscando columnas como Ativo, Activo, Fecha o Abertura). Revisa el archivo.');
+        }
+
+        // Detect delimiter: semicolon is standard for Nelogica, comma for simple
+        const delimiter = lines[headerLineIdx].includes(';') ? ';' : ',';
+        const rawHeaders = lines[headerLineIdx].split(delimiter).map(h => h.trim());
+        const headers = rawHeaders.map(h => {
+          return h.toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "") // remove accents/diacritics
+            .replace(/[^a-z0-9]/g, ""); // remove non-alphanumeric
+        });
+
+        // Map column indices
+        const assetIdx = headers.findIndex(h => h === 'ativo' || h === 'activo');
+        const dateIdx = headers.findIndex(h => h === 'abertura' || h === 'fecha');
+        const timeIdx = headers.indexOf('hora');
+        const opIdx = headers.findIndex(h => h === 'lado' || h === 'operacion');
+        
+        const sizeIdx = headers.indexOf('contratos');
+        const qtdCompraIdx = headers.indexOf('qtdcompra');
+        const qtdVendaIdx = headers.indexOf('qtdvenda');
+
+        const pointsIdx = headers.indexOf('puntos');
+        const precocompraIdx = headers.indexOf('precocompra');
+        const precovendaIdx = headers.indexOf('precovenda');
+
+        // Result column index (prioritizing resoperacao over resintervalobruto, total or resultadobrl)
+        let resultIdx = headers.indexOf('resoperacao');
+        if (resultIdx === -1) resultIdx = headers.indexOf('resintervalobruto');
+        if (resultIdx === -1) resultIdx = headers.indexOf('total');
+        if (resultIdx === -1) resultIdx = headers.indexOf('resultadobrl');
+
+        if (assetIdx === -1 || resultIdx === -1) {
+          throw new Error('No se pudieron mapear las columnas obligatorias del reporte de ProfitPRO (se requiere "Ativo" y alguna columna de resultado financiero).');
+        }
+
+        const parseBrlNumber = (str: string): number => {
+          if (!str) return 0;
+          // Clean spaces, remove dot thousands, change comma decimal to dot
+          let normalized = str.replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
+          return Number(normalized) || 0;
+        };
+
+        for (let i = headerLineIdx + 1; i < lines.length; i++) {
+          const cols = lines[i].split(delimiter).map(c => c.trim().replace(/^"|"$/g, ''));
+          
+          // Skip incomplete lines
+          if (cols.length < Math.max(assetIdx, resultIdx) + 1) continue;
+          
+          const assetName = cols[assetIdx]?.toUpperCase();
+          if (!assetName || assetName === 'TOTAL' || assetName.startsWith('CONTA')) continue;
+
           const isWIN = assetName.startsWith('WIN');
           const isWDO = assetName.startsWith('WDO');
 
+          // Date and time parsing
+          let dateVal = '2026-07-07';
+          let timeVal = '10:00';
+          
+          const rawDateStr = cols[dateIdx];
+          if (rawDateStr) {
+            // Check if it has time inside (e.g. "31/03/2026 09:27:30")
+            const spaceParts = rawDateStr.split(/\s+/);
+            const dPart = spaceParts[0];
+            const tPart = spaceParts[1];
+
+            const dateParts = dPart.split('/');
+            if (dateParts.length === 3) {
+              // DD/MM/YYYY to YYYY-MM-DD
+              dateVal = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
+            } else {
+              dateVal = dPart;
+            }
+
+            if (tPart) {
+              timeVal = tPart.slice(0, 5); // HH:MM
+            } else if (timeIdx !== -1 && cols[timeIdx]) {
+              timeVal = cols[timeIdx].slice(0, 5);
+            }
+          }
+
+          // Side / Direction
+          const rawSide = cols[opIdx]?.toLowerCase() || 'compra';
+          const side = (rawSide.startsWith('v') || rawSide === 'venta' || rawSide === 'venda' || rawSide === 'cshort') ? 'Venta' : 'Compra';
+
+          // Size (Quantity)
+          let size = 1;
+          if (qtdCompraIdx !== -1 || qtdVendaIdx !== -1) {
+            const qc = qtdCompraIdx !== -1 ? parseBrlNumber(cols[qtdCompraIdx]) : 0;
+            const qv = qtdVendaIdx !== -1 ? parseBrlNumber(cols[qtdVendaIdx]) : 0;
+            size = Math.max(qc, qv) || 1;
+          } else if (sizeIdx !== -1) {
+            size = parseBrlNumber(cols[sizeIdx]) || 1;
+          }
+
+          // Financial Result
+          const financialRes = parseBrlNumber(cols[resultIdx]);
+
+          // Points and Ticks
+          let points = 0;
+          if (precocompraIdx !== -1 && precovendaIdx !== -1) {
+            const pCompra = parseBrlNumber(cols[precocompraIdx]);
+            const pVenda = parseBrlNumber(cols[precovendaIdx]);
+            if (pCompra > 0 && pVenda > 0) {
+              if (side === 'Compra') {
+                points = pVenda - pCompra;
+              } else {
+                points = pCompra - pVenda;
+              }
+            }
+          } else if (pointsIdx !== -1) {
+            points = parseBrlNumber(cols[pointsIdx]);
+          }
+
+          points = Number(points.toFixed(2));
+          const ticks = isWIN ? points / 5 : isWDO ? points * 2 : points;
+
+          const capital = 15000;
+          const riskPercent = 1.0;
+
           const t: Trade = {
             id: `imported-profit-${Date.now()}-${i}`,
-            date: dateIdx !== -1 ? cols[dateIdx] : '2026-07-07',
-            time: timeIdx !== -1 ? cols[timeIdx] : '10:00',
+            date: dateVal,
+            time: timeVal,
             platform: 'ProfitPRO',
             market: 'Nacional',
             asset: assetName,
             assetType: isWIN ? 'Mini Índice' : isWDO ? 'Mini Dólar' : 'Acciones',
-            side: (cols[opIdx] === 'Venta' || cols[opIdx]?.toLowerCase().startsWith('v')) ? 'Venta' : 'Compra',
+            side: side,
             timeframe: '5m',
             strategy: 'Importación Automática',
             setup: 'Nivel Técnico',
@@ -99,17 +214,17 @@ export default function ImportView({ onImportComplete, onClearAllTrades, usdToBr
             confirmations: ['Datos Importados ProfitPRO'],
             entryReason: 'Operación importada mediante archivo de profit report.',
             exitReason: 'Salida de mercado ejecutada.',
-            capital: 15000,
-            riskPercent: 1.0,
-            stopLoss: pointsIdx !== -1 ? Number(cols[pointsIdx]) / 2 : 100,
-            takeProfit: pointsIdx !== -1 ? Number(cols[pointsIdx]) : 200,
+            capital: capital,
+            riskPercent: riskPercent,
+            stopLoss: isWIN ? 150 : isWDO ? 5 : 50,
+            takeProfit: isWIN ? 300 : isWDO ? 10 : 100,
             rMultiple: financialRes >= 0 ? 1.5 : -1.0,
-            size: sizeIdx !== -1 ? Number(cols[sizeIdx]) : 2,
+            size: size,
             currency: 'BRL',
             financialResult: financialRes,
-            pointsResult: pointsIdx !== -1 ? Number(cols[pointsIdx]) : 0,
-            ticksResult: pointsIdx !== -1 ? Number(cols[pointsIdx]) * 2 : 0,
-            percentResult: Number(((financialRes / 15000) * 100).toFixed(2)),
+            pointsResult: points,
+            ticksResult: Number(ticks.toFixed(1)),
+            percentResult: Number(((financialRes / capital) * 100).toFixed(2)),
             emotionBefore: 'Calmado',
             confidenceBefore: 4,
             stressBefore: 2,
@@ -119,11 +234,15 @@ export default function ImportView({ onImportComplete, onClearAllTrades, usdToBr
             toRepeat: '',
             toAvoid: '',
             images: [],
-            observations: 'Operación importada de ProfitPRO.',
+            observations: 'Operación importada de ProfitPRO (Reporte oficial).',
             exchangeRateUsed: usdToBrlRate,
             createdAt: timestampNow
           };
           parsedTrades.push(t);
+        }
+
+        if (parsedTrades.length === 0) {
+          throw new Error('No se pudieron encontrar filas de operaciones válidas en el archivo de ProfitPRO.');
         }
       } else {
         // MT5 HTML simple tag parser
