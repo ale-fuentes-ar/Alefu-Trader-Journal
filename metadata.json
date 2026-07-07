@@ -1,0 +1,6 @@
+{
+  "name": "Trader Journal Pro",
+  "description": "Diario de trading profesional para ProfitPRO (BRL) y MT5 (USD) con estadísticas avanzadas, control de objetivos, análisis de psicología y asistente de IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
