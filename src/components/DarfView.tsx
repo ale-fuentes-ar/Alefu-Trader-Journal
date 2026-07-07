@@ -67,10 +67,17 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
   // Manual overrides for trade classifications: tradeId -> 'DayTrade' | 'SwingTrade'
   const [tradeOverrides, setTradeOverrides] = useState<Record<string, 'DayTrade' | 'SwingTrade'>>({});
 
-  // Dynamic carry-forward calculation for accumulated losses from previous months of the same year
-  const autoAccumulatedLosses = useMemo(() => {
+  // State for pending DARF from previous years (manual start balance)
+  const [priorPendingDarf, setPriorPendingDarf] = useState<number>(() => {
+    const saved = localStorage.getItem(`darf_prior_pending_darf_${selectedYear}`);
+    return saved ? Number(saved) : 0;
+  });
+
+  // Dynamic carry-forward calculation for accumulated losses AND pending DARF from previous months of the same year
+  const autoAccumulated = useMemo(() => {
     let dtAccumulatedLoss = priorLossesDayTrade; // Start with user-defined starting base loss
     let stAccumulatedLoss = priorLossesSwingTrade; // Start with user-defined starting base loss
+    let pendingDarfAccumulated = priorPendingDarf; // Start with user-defined starting pending DARF
 
     // Process month-by-month for previous months of the selected year
     for (let m = 1; m < selectedMonth; m++) {
@@ -112,6 +119,39 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
       const mDtNet = mDtProfit - mDtLoss;
       const mStNet = mStProfit - mStLoss;
 
+      // Calculate taxes for month m
+      const mDtAfterPrior = mDtNet > 0 ? Math.max(0, mDtNet - dtAccumulatedLoss) : 0;
+      const mStAfterPrior = mStNet > 0 ? Math.max(0, mStNet - stAccumulatedLoss) : 0;
+      
+      const mDtTaxDue = mDtAfterPrior > 0 ? mDtAfterPrior * 0.20 : 0;
+      const mIsStExempt = stockSalesUnder20k && mTrades.some(t => {
+        const finalClass = tradeOverrides[t.id] || (t.platform === 'ProfitPRO' || t.asset.toUpperCase().startsWith('WIN') || t.asset.toUpperCase().startsWith('WDO') ? 'DayTrade' : 'SwingTrade');
+        return finalClass === 'SwingTrade' && t.assetType === 'Acciones';
+      });
+      const mStTaxDue = mStAfterPrior > 0 && !mIsStExempt ? mStAfterPrior * 0.15 : 0;
+      
+      const mTotalTaxBeforeIrrf = mDtTaxDue + mStTaxDue;
+      
+      // We use estimated IRRF for past months calculation dynamically
+      const mIrrfDT = mDtProfit > 0 ? mDtProfit * 0.01 : 0;
+      const mIrrfST = mStProfit > 0 ? mStProfit * 0.00005 : 0;
+      const mTotalIrrf = mIrrfDT + mIrrfST;
+
+      let mFinalDarf = Math.max(0, mTotalTaxBeforeIrrf - mTotalIrrf);
+      
+      // Add previously pending DARF to this month's DARF
+      mFinalDarf += pendingDarfAccumulated;
+
+      const isPaid = payments[`${selectedYear}-${m}`]?.paid;
+
+      if (!isPaid) {
+        // If not paid (or couldn't be paid because it was < 10), it accumulates
+        pendingDarfAccumulated = mFinalDarf;
+      } else {
+        // If paid, pending DARF resets to 0
+        pendingDarfAccumulated = 0;
+      }
+
       // Update carry forward for Day Trade: losses accumulate, profits offset them
       if (mDtNet < 0) {
         dtAccumulatedLoss += Math.abs(mDtNet);
@@ -129,18 +169,22 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
 
     return {
       dayTrade: dtAccumulatedLoss,
-      swingTrade: stAccumulatedLoss
+      swingTrade: stAccumulatedLoss,
+      pendingDarf: pendingDarfAccumulated
     };
-  }, [trades, selectedYear, selectedMonth, priorLossesDayTrade, priorLossesSwingTrade, tradeOverrides, usdToBrlRate]);
+  }, [trades, selectedYear, selectedMonth, priorLossesDayTrade, priorLossesSwingTrade, priorPendingDarf, tradeOverrides, usdToBrlRate, payments, stockSalesUnder20k]);
 
   // Reset or update values when year/month changes
-  const handleSavePriorLosses = (type: 'DT' | 'ST', value: number) => {
+  const handleSavePriorLosses = (type: 'DT' | 'ST' | 'DARF', value: number) => {
     if (type === 'DT') {
       setPriorLossesDayTrade(value);
       localStorage.setItem(`darf_prior_losses_dt_${selectedYear}`, String(value));
-    } else {
+    } else if (type === 'ST') {
       setPriorLossesSwingTrade(value);
       localStorage.setItem(`darf_prior_losses_st_${selectedYear}`, String(value));
+    } else {
+      setPriorPendingDarf(value);
+      localStorage.setItem(`darf_prior_pending_darf_${selectedYear}`, String(value));
     }
   };
 
@@ -242,7 +286,7 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
   // Final Calculations after offsets
   // Day Trade Calculations using automatic dynamic loss carry-forward
   const dtAfterPriorOffset = summary.dtNet > 0 
-    ? Math.max(0, summary.dtNet - autoAccumulatedLosses.dayTrade) 
+    ? Math.max(0, summary.dtNet - autoAccumulated.dayTrade) 
     : summary.dtNet;
   
   const dtTaxDue = dtAfterPriorOffset > 0 ? dtAfterPriorOffset * 0.20 : 0;
@@ -252,7 +296,7 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
   const isStExempt = stockSalesUnder20k && classifiedTrades.some(t => t.classification === 'SwingTrade' && t.assetType === 'Acciones');
   
   const stAfterPriorOffset = summary.stNet > 0
-    ? Math.max(0, summary.stNet - autoAccumulatedLosses.swingTrade)
+    ? Math.max(0, summary.stNet - autoAccumulated.swingTrade)
     : summary.stNet;
 
   const stTaxDue = stAfterPriorOffset > 0 && !isStExempt ? stAfterPriorOffset * 0.15 : 0;
@@ -260,7 +304,10 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
   // Total Calculations
   const totalTaxBeforeIrrf = dtTaxDue + stTaxDue;
   const totalIrrf = irrfDayTrade + irrfSwingTrade;
-  const finalDarfValue = Math.max(0, totalTaxBeforeIrrf - totalIrrf);
+  const currentMonthDarfValue = Math.max(0, totalTaxBeforeIrrf - totalIrrf);
+  
+  // Final DARF to pay includes pending DARF from previous months
+  const finalDarfValue = currentMonthDarfValue + autoAccumulated.pendingDarf;
 
   const monthsList = [
     { value: 1, label: 'Enero' },
@@ -704,14 +751,14 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
                       <HelpCircle className="h-3 w-3 text-zinc-500" title="Calculado automáticamente escaneando los meses anteriores del año en busca de resultados negativos" />
                     </span>
                     <span>
-                      R$ {Math.max(0, autoAccumulatedLosses.dayTrade - priorLossesDayTrade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      R$ {Math.max(0, autoAccumulated.dayTrade - priorLossesDayTrade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
 
                   <div className="flex justify-between font-mono text-zinc-350 font-bold bg-zinc-950/40 p-1.5 rounded border border-zinc-850">
                     <span>(=) Total de Pérdidas a Compensar:</span>
                     <span className="text-red-400 font-mono">
-                      R$ {autoAccumulatedLosses.dayTrade.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      R$ {autoAccumulated.dayTrade.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
 
@@ -766,14 +813,14 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
                       <HelpCircle className="h-3 w-3 text-zinc-500" title="Calculado automáticamente escaneando los meses anteriores del año en busca de resultados negativos" />
                     </span>
                     <span>
-                      R$ {Math.max(0, autoAccumulatedLosses.swingTrade - priorLossesSwingTrade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      R$ {Math.max(0, autoAccumulated.swingTrade - priorLossesSwingTrade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
 
                   <div className="flex justify-between font-mono text-zinc-350 font-bold bg-zinc-950/40 p-1.5 rounded border border-zinc-850">
                     <span>(=) Total de Pérdidas a Compensar:</span>
                     <span className="text-blue-400 font-mono">
-                      R$ {autoAccumulatedLosses.swingTrade.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      R$ {autoAccumulated.swingTrade.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
 
@@ -856,8 +903,39 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
                     />
                   </div>
 
+                  <div className="flex justify-between font-mono pt-3 font-bold text-zinc-300">
+                    <span>(=) DARF Mensual (antes de postergados):</span>
+                    <span>
+                      R$ {currentMonthDarfValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 font-mono pt-1">
+                    <span className="text-zinc-400 flex items-center space-x-1.5">
+                      <span>(+) DARF pendiente años anteriores / manual (R$):</span>
+                      <HelpCircle className="h-3 w-3 text-zinc-500" title="Saldo de DARFs no pagados de años anteriores" />
+                    </span>
+                    <input 
+                      type="number"
+                      value={priorPendingDarf || ''}
+                      onChange={(e) => handleSavePriorLosses('DARF', Number(e.target.value))}
+                      placeholder="0.00"
+                      className="w-32 bg-zinc-950 border border-zinc-800 text-zinc-100 text-right text-xs font-mono px-2 py-1 rounded focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  
+                  <div className="flex justify-between font-mono text-zinc-400">
+                    <span className="flex items-center space-x-1.5">
+                      <span>(+) DARF acumulado de meses anteriores (automático):</span>
+                      <HelpCircle className="h-3 w-3 text-zinc-500" title="Suma de DARFs de meses anteriores del año que fueron menores a R$ 10,00 o no fueron marcados como pagados." />
+                    </span>
+                    <span>
+                      R$ {Math.max(0, autoAccumulated.pendingDarf - priorPendingDarf).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
                   <div className="flex justify-between font-mono pt-3 border-t border-zinc-800 font-bold text-emerald-400 text-sm">
-                    <span>(=) VALOR TOTAL DARF NETO A PAGAR:</span>
+                    <span>(=) VALOR TOTAL DARF A PAGAR:</span>
                     <span>
                       R$ {finalDarfValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                     </span>
