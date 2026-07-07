@@ -11,12 +11,13 @@ import {
   TrendingUp,
   Globe,
   Database,
-  Layers
+  Layers,
+  Calculator
 } from 'lucide-react';
 import { Trade, TradingGoal } from '../types';
 
 interface SidebarProps {
-  activeView: 'dashboard' | 'trades' | 'stats' | 'calendar' | 'goals' | 'import' | 'ai' | 'strategies';
+  activeView: 'dashboard' | 'trades' | 'stats' | 'calendar' | 'goals' | 'import' | 'ai' | 'strategies' | 'darf';
   onViewChange: (view: any) => void;
   trades: Trade[];
   goals: TradingGoal[];
@@ -42,6 +43,7 @@ export default function Sidebar({
     { id: 'goals', label: 'Objetivos', icon: Target },
     { id: 'calendar', label: 'Calendario', icon: Calendar },
     { id: 'import', label: 'Importación', icon: UploadCloud },
+    { id: 'darf', label: 'Cálculo DARF', icon: Calculator, badge: 'BR' },
     { id: 'ai', label: 'Trader Copilot AI', icon: Bot, badge: 'IA' },
   ];
 

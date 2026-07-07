@@ -17,10 +17,11 @@ import GoalsView from './components/GoalsView';
 import ImportView from './components/ImportView';
 import AICopilot from './components/AICopilot';
 import StrategiesView from './components/StrategiesView';
+import DarfView from './components/DarfView';
 import { Trade, TradingGoal, Strategy } from './types';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'trades' | 'stats' | 'calendar' | 'goals' | 'import' | 'ai' | 'strategies'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'trades' | 'stats' | 'calendar' | 'goals' | 'import' | 'ai' | 'strategies' | 'darf'>('dashboard');
   const [trades, setTrades] = useState<Trade[]>([]);
   const [goals, setGoals] = useState<TradingGoal[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
@@ -341,6 +342,13 @@ export default function App() {
             trades={trades}
             onSaveStrategy={handleSaveStrategy}
             onDeleteStrategy={handleDeleteStrategy}
+            usdToBrlRate={usdToBrlRate}
+          />
+        )}
+
+        {activeView === 'darf' && (
+          <DarfView 
+            trades={trades}
             usdToBrlRate={usdToBrlRate}
           />
         )}
