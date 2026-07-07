@@ -54,12 +54,84 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
     return saved ? Number(saved) : 0;
   });
 
+  // State to track paid DARFs by key "YEAR-MONTH"
+  const [payments, setPayments] = useState<Record<string, { paid: boolean; paidAt?: string; reference?: string }>>(() => {
+    const saved = localStorage.getItem('darf_payments_records');
+    return saved ? JSON.parse(saved) : {};
+  });
+
   const [manualIrrfDayTrade, setManualIrrfDayTrade] = useState<string>('');
   const [manualIrrfSwingTrade, setManualIrrfSwingTrade] = useState<string>('');
   const [stockSalesUnder20k, setStockSalesUnder20k] = useState<boolean>(true);
 
   // Manual overrides for trade classifications: tradeId -> 'DayTrade' | 'SwingTrade'
   const [tradeOverrides, setTradeOverrides] = useState<Record<string, 'DayTrade' | 'SwingTrade'>>({});
+
+  // Dynamic carry-forward calculation for accumulated losses from previous months of the same year
+  const autoAccumulatedLosses = useMemo(() => {
+    let dtAccumulatedLoss = priorLossesDayTrade; // Start with user-defined starting base loss
+    let stAccumulatedLoss = priorLossesSwingTrade; // Start with user-defined starting base loss
+
+    // Process month-by-month for previous months of the selected year
+    for (let m = 1; m < selectedMonth; m++) {
+      // Get all trades of selected year in month m
+      const mTrades = trades.filter(t => {
+        const d = new Date(t.date);
+        return d.getFullYear() === selectedYear && (d.getMonth() + 1) === m;
+      });
+
+      let mDtProfit = 0;
+      let mDtLoss = 0;
+      let mStProfit = 0;
+      let mStLoss = 0;
+
+      mTrades.forEach(t => {
+        let autoClass: 'DayTrade' | 'SwingTrade' = 'DayTrade';
+        const assetUpper = t.asset.toUpperCase();
+        const isFutures = assetUpper.startsWith('WIN') || assetUpper.startsWith('WDO');
+        const isShortTimeframe = ['1m', '2m', '5m', '15m', '30m', '1H'].includes(t.timeframe);
+
+        if (t.platform === 'ProfitPRO' || isFutures || isShortTimeframe) {
+          autoClass = 'DayTrade';
+        } else {
+          autoClass = 'SwingTrade';
+        }
+
+        const finalClass = tradeOverrides[t.id] || autoClass;
+        const valInBRL = t.currency === 'BRL' ? t.financialResult : t.financialResult * usdToBrlRate;
+
+        if (finalClass === 'DayTrade') {
+          if (valInBRL > 0) mDtProfit += valInBRL;
+          else mDtLoss += Math.abs(valInBRL);
+        } else {
+          if (valInBRL > 0) mStProfit += valInBRL;
+          else mStLoss += Math.abs(valInBRL);
+        }
+      });
+
+      const mDtNet = mDtProfit - mDtLoss;
+      const mStNet = mStProfit - mStLoss;
+
+      // Update carry forward for Day Trade: losses accumulate, profits offset them
+      if (mDtNet < 0) {
+        dtAccumulatedLoss += Math.abs(mDtNet);
+      } else {
+        dtAccumulatedLoss = Math.max(0, dtAccumulatedLoss - mDtNet);
+      }
+
+      // Update carry forward for Swing Trade: losses accumulate, profits offset them
+      if (mStNet < 0) {
+        stAccumulatedLoss += Math.abs(mStNet);
+      } else {
+        stAccumulatedLoss = Math.max(0, stAccumulatedLoss - mStNet);
+      }
+    }
+
+    return {
+      dayTrade: dtAccumulatedLoss,
+      swingTrade: stAccumulatedLoss
+    };
+  }, [trades, selectedYear, selectedMonth, priorLossesDayTrade, priorLossesSwingTrade, tradeOverrides, usdToBrlRate]);
 
   // Reset or update values when year/month changes
   const handleSavePriorLosses = (type: 'DT' | 'ST', value: number) => {
@@ -168,19 +240,19 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
   const irrfSwingTrade = manualIrrfSwingTrade !== '' ? Number(manualIrrfSwingTrade) : summary.estimatedIrrfST;
 
   // Final Calculations after offsets
-  // Day Trade Calculations
+  // Day Trade Calculations using automatic dynamic loss carry-forward
   const dtAfterPriorOffset = summary.dtNet > 0 
-    ? Math.max(0, summary.dtNet - priorLossesDayTrade) 
+    ? Math.max(0, summary.dtNet - autoAccumulatedLosses.dayTrade) 
     : summary.dtNet;
   
   const dtTaxDue = dtAfterPriorOffset > 0 ? dtAfterPriorOffset * 0.20 : 0;
 
-  // Swing Trade Calculations
+  // Swing Trade Calculations using automatic dynamic loss carry-forward
   // Check if Swing Trade is exempt (Ações sales under 20k, but let's apply simply if checked and assetType is Acciones)
   const isStExempt = stockSalesUnder20k && classifiedTrades.some(t => t.classification === 'SwingTrade' && t.assetType === 'Acciones');
   
   const stAfterPriorOffset = summary.stNet > 0
-    ? Math.max(0, summary.stNet - priorLossesSwingTrade)
+    ? Math.max(0, summary.stNet - autoAccumulatedLosses.swingTrade)
     : summary.stNet;
 
   const stTaxDue = stAfterPriorOffset > 0 && !isStExempt ? stAfterPriorOffset * 0.15 : 0;
@@ -500,6 +572,94 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
             </div>
           </div>
 
+          {/* Payment Status Card */}
+          <div className="bg-zinc-900/60 rounded border border-zinc-800 overflow-hidden">
+            <div className="px-4 py-3 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
+              <h3 className="text-xs font-bold font-mono text-zinc-200 tracking-wider flex items-center space-x-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                <span>ESTADO DE PAGO DE ESTE MES</span>
+              </h3>
+              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                payments[`${selectedYear}-${selectedMonth}`]?.paid 
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                  : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+              }`}>
+                {payments[`${selectedYear}-${selectedMonth}`]?.paid ? 'PAGADO' : 'PENDIENTE'}
+              </span>
+            </div>
+
+            <div className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <p className="text-xs text-zinc-300 leading-relaxed">
+                  Registra si ya realizaste el pago de este DARF (R$ {finalDarfValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}) para mantener tu historial al día.
+                </p>
+                {payments[`${selectedYear}-${selectedMonth}`]?.paid && (
+                  <div className="text-[10px] text-zinc-400 font-mono space-y-0.5 mt-2">
+                    <p>📅 Fecha de Pago: <span className="text-zinc-200">{payments[`${selectedYear}-${selectedMonth}`]?.paidAt || 'No ingresada'}</span></p>
+                    {payments[`${selectedYear}-${selectedMonth}`]?.reference && (
+                      <p>🔑 Comprobante/Ref: <span className="text-zinc-200">{payments[`${selectedYear}-${selectedMonth}`]?.reference}</span></p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+                {payments[`${selectedYear}-${selectedMonth}`]?.paid ? (
+                  <button
+                    onClick={() => {
+                      const updated = { ...payments };
+                      delete updated[`${selectedYear}-${selectedMonth}`];
+                      setPayments(updated);
+                      localStorage.setItem('darf_payments_records', JSON.stringify(updated));
+                    }}
+                    className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold rounded transition cursor-pointer"
+                  >
+                    Remover Registro de Pago
+                  </button>
+                ) : (
+                  <div className="flex flex-col gap-2 w-full sm:w-auto">
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="date"
+                        id="payment-date-input"
+                        defaultValue={new Date().toISOString().split('T')[0]}
+                        className="bg-zinc-950 border border-zinc-800 text-zinc-100 text-xs font-mono px-2 py-1 rounded focus:outline-none focus:border-emerald-500"
+                      />
+                      <input
+                        type="text"
+                        id="payment-ref-input"
+                        placeholder="Ref. o Código Banco"
+                        className="bg-zinc-950 border border-zinc-800 text-zinc-100 placeholder-zinc-650 text-xs font-mono px-2 py-1 rounded focus:outline-none focus:border-emerald-500 w-36"
+                      />
+                      <button
+                        onClick={() => {
+                          const dateEl = document.getElementById('payment-date-input') as HTMLInputElement | null;
+                          const refEl = document.getElementById('payment-ref-input') as HTMLInputElement | null;
+                          const paidAt = dateEl?.value || new Date().toISOString().split('T')[0];
+                          const reference = refEl?.value || '';
+                          
+                          const updated = {
+                            ...payments,
+                            [`${selectedYear}-${selectedMonth}`]: {
+                              paid: true,
+                              paidAt,
+                              reference
+                            }
+                          };
+                          setPayments(updated);
+                          localStorage.setItem('darf_payments_records', JSON.stringify(updated));
+                        }}
+                        className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded transition cursor-pointer text-center whitespace-nowrap"
+                      >
+                        Marcar como Pagado
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Interactive Step-by-Step Calculation */}
           <div className="bg-zinc-900/60 rounded border border-zinc-800 overflow-hidden">
             <div className="px-4 py-3 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
@@ -526,8 +686,8 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
 
                   <div className="flex items-center justify-between gap-4 font-mono">
                     <span className="text-zinc-400 flex items-center space-x-1.5">
-                      <span>Pérdidas acumuladas meses anteriores (R$):</span>
-                      <HelpCircle className="h-3 w-3 text-zinc-500" title="Pérdidas netas acumuladas de meses anteriores del mismo año que puedes deducir" />
+                      <span>Pérdidas de años anteriores / manual (R$):</span>
+                      <HelpCircle className="h-3 w-3 text-zinc-500" title="Pérdidas netas acumuladas de años anteriores que traes como saldo inicial al año actual" />
                     </span>
                     <input 
                       type="number"
@@ -536,6 +696,23 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
                       placeholder="0.00"
                       className="w-32 bg-zinc-950 border border-zinc-800 text-zinc-100 text-right text-xs font-mono px-2 py-1 rounded focus:outline-none focus:border-red-500"
                     />
+                  </div>
+
+                  <div className="flex justify-between font-mono text-zinc-400">
+                    <span className="flex items-center space-x-1.5">
+                      <span>Pérdidas acumuladas año actual (automático):</span>
+                      <HelpCircle className="h-3 w-3 text-zinc-500" title="Calculado automáticamente escaneando los meses anteriores del año en busca de resultados negativos" />
+                    </span>
+                    <span>
+                      R$ {Math.max(0, autoAccumulatedLosses.dayTrade - priorLossesDayTrade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between font-mono text-zinc-350 font-bold bg-zinc-950/40 p-1.5 rounded border border-zinc-850">
+                    <span>(=) Total de Pérdidas a Compensar:</span>
+                    <span className="text-red-400 font-mono">
+                      R$ {autoAccumulatedLosses.dayTrade.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
                   </div>
 
                   <div className="flex justify-between font-mono border-t border-zinc-800/40 pt-2 font-bold">
@@ -570,7 +747,10 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
                   </div>
 
                   <div className="flex items-center justify-between gap-4 font-mono">
-                    <span className="text-zinc-400">Pérdidas acumuladas Swing Trade (R$):</span>
+                    <span className="text-zinc-400 flex items-center space-x-1.5">
+                      <span>Pérdidas de años anteriores / manual (R$):</span>
+                      <HelpCircle className="h-3 w-3 text-zinc-500" title="Pérdidas netas acumuladas de años anteriores que traes como saldo inicial al año actual" />
+                    </span>
                     <input 
                       type="number"
                       value={priorLossesSwingTrade || ''}
@@ -578,6 +758,23 @@ export default function DarfView({ trades, usdToBrlRate }: DarfViewProps) {
                       placeholder="0.00"
                       className="w-32 bg-zinc-950 border border-zinc-800 text-zinc-100 text-right text-xs font-mono px-2 py-1 rounded focus:outline-none focus:border-blue-500"
                     />
+                  </div>
+
+                  <div className="flex justify-between font-mono text-zinc-400">
+                    <span className="flex items-center space-x-1.5">
+                      <span>Pérdidas acumuladas año actual (automático):</span>
+                      <HelpCircle className="h-3 w-3 text-zinc-500" title="Calculado automáticamente escaneando los meses anteriores del año en busca de resultados negativos" />
+                    </span>
+                    <span>
+                      R$ {Math.max(0, autoAccumulatedLosses.swingTrade - priorLossesSwingTrade).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between font-mono text-zinc-350 font-bold bg-zinc-950/40 p-1.5 rounded border border-zinc-850">
+                    <span>(=) Total de Pérdidas a Compensar:</span>
+                    <span className="text-blue-400 font-mono">
+                      R$ {autoAccumulatedLosses.swingTrade.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
                   </div>
 
                   <div className="flex items-center justify-between font-mono">
