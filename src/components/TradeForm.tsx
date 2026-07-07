@@ -7,14 +7,18 @@ import {
   DollarSign, 
   Activity, 
   ShieldAlert,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Plus,
+  Info
 } from 'lucide-react';
-import { Trade } from '../types';
+import { Trade, Strategy } from '../types';
 
 interface TradeFormProps {
   onSave: (trade: Trade) => void;
   editingTrade?: Trade | null;
   usdToBrlRate: number;
+  strategies: Strategy[];
+  onSaveStrategy: (strategy: Strategy) => Promise<Strategy | null>;
 }
 
 const PRESET_CONFIRMATIONS = [
@@ -35,7 +39,13 @@ const MOCK_GRAPHICS = [
   'https://images.unsplash.com/photo-1624996379697-f01d168b1a52?w=500&auto=format&fit=crop&q=60'
 ];
 
-export default function TradeForm({ onSave, editingTrade, usdToBrlRate }: TradeFormProps) {
+export default function TradeForm({ 
+  onSave, 
+  editingTrade, 
+  usdToBrlRate,
+  strategies,
+  onSaveStrategy
+}: TradeFormProps) {
   const [activeTab, setActiveTab] = useState<'general' | 'risk' | 'psychology'>('general');
 
   // General Form State
@@ -55,6 +65,13 @@ export default function TradeForm({ onSave, editingTrade, usdToBrlRate }: TradeF
   const [confirmations, setConfirmations] = useState<string[]>([]);
   const [entryReason, setEntryReason] = useState('');
   const [exitReason, setExitReason] = useState('');
+
+  // Inline Strategy Creator State
+  const [showInlineCreator, setShowInlineCreator] = useState(false);
+  const [newStratName, setNewStratName] = useState('');
+  const [newStratSetup, setNewStratSetup] = useState('');
+  const [newStratDesc, setNewStratDesc] = useState('');
+  const [inlineCreatorError, setInlineCreatorError] = useState<string | null>(null);
 
   // Risk & Results State
   const [capital, setCapital] = useState<number>(15000);
@@ -140,6 +157,52 @@ export default function TradeForm({ onSave, editingTrade, usdToBrlRate }: TradeF
       setAsset('EURUSD');
       setAssetType('Forex');
       setCapital(5000);
+    }
+  };
+
+  const handleStrategyChange = (selectedName: string) => {
+    setStrategy(selectedName);
+    const matched = strategies.find(s => s.name.trim().toLowerCase() === selectedName.trim().toLowerCase());
+    if (matched && matched.defaultSetup) {
+      setSetup(matched.defaultSetup);
+    }
+  };
+
+  const handleSaveInlineStrategy = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    setInlineCreatorError(null);
+
+    if (!newStratName.trim()) {
+      setInlineCreatorError('El nombre es obligatorio.');
+      return;
+    }
+
+    const duplicate = strategies.some(s => s.name.trim().toLowerCase() === newStratName.trim().toLowerCase());
+    if (duplicate) {
+      setInlineCreatorError('Ya existe una estrategia con ese nombre.');
+      return;
+    }
+
+    const newStrat: Strategy = {
+      id: `s-${Date.now()}`,
+      name: newStratName.trim(),
+      defaultSetup: newStratSetup.trim(),
+      description: newStratDesc.trim()
+    };
+
+    const saved = await onSaveStrategy(newStrat);
+    if (saved) {
+      setStrategy(saved.name);
+      if (saved.defaultSetup) {
+        setSetup(saved.defaultSetup);
+      }
+      // Reset inline creator state
+      setNewStratName('');
+      setNewStratSetup('');
+      setNewStratDesc('');
+      setShowInlineCreator(false);
+    } else {
+      setInlineCreatorError('Error al guardar la estrategia.');
     }
   };
 
@@ -404,17 +467,98 @@ export default function TradeForm({ onSave, editingTrade, usdToBrlRate }: TradeF
             {/* Technical Section */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-zinc-800">
               
-              {/* Strategy */}
-              <div>
-                <label className="block text-[10px] font-bold font-mono text-zinc-400 mb-1.5">ESTRATEGIA</label>
-                <input
-                  type="text"
-                  value={strategy}
-                  onChange={(e) => setStrategy(e.target.value)}
-                  required
-                  placeholder="Pullback VWAP, Rompimiento..."
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-100 focus:outline-none focus:border-blue-500"
-                />
+              {/* Strategy with Inline Creator option */}
+              <div className="relative">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[10px] font-bold font-mono text-zinc-400">ESTRATEGIA</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowInlineCreator(!showInlineCreator);
+                      setInlineCreatorError(null);
+                    }}
+                    className="text-[10px] text-blue-400 hover:text-blue-300 transition flex items-center space-x-1 font-mono cursor-pointer"
+                  >
+                    <Plus className="h-3 w-3" />
+                    <span>{showInlineCreator ? 'Cerrar' : 'Nueva'}</span>
+                  </button>
+                </div>
+
+                {!showInlineCreator ? (
+                  <>
+                    <select
+                      value={strategy}
+                      onChange={(e) => handleStrategyChange(e.target.value)}
+                      required
+                      className="w-full bg-zinc-900 border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-100 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="">-- Seleccionar Estrategia --</option>
+                      {strategies.map((s) => (
+                        <option key={s.id} value={s.name}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Small matched description under dropdown */}
+                    {strategy && strategies.find(s => s.name.trim().toLowerCase() === strategy.trim().toLowerCase()) && (
+                      <div className="mt-1.5 flex items-start space-x-1 text-[10px] text-zinc-500 leading-tight">
+                        <Info className="h-3 w-3 mt-0.5 text-blue-500/70 shrink-0" />
+                        <span>
+                          {strategies.find(s => s.name.trim().toLowerCase() === strategy.trim().toLowerCase())?.description || 'Sin descripción detallada.'}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="bg-zinc-900 border border-zinc-800 rounded p-3 space-y-2.5 z-20 absolute left-0 right-0 top-[100%] mt-1 shadow-2xl">
+                    <div className="text-[10px] font-bold text-zinc-300 font-mono border-b border-zinc-800 pb-1">NUEVA ESTRATEGIA RAPIDA</div>
+                    {inlineCreatorError && (
+                      <div className="text-[9px] text-rose-400 font-mono bg-rose-950/20 border border-rose-900/40 p-1 rounded">
+                        {inlineCreatorError}
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={newStratName}
+                        onChange={(e) => setNewStratName(e.target.value)}
+                        placeholder="Nombre (ej. Fading Extremo)"
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-blue-500"
+                      />
+                      <input
+                        type="text"
+                        value={newStratSetup}
+                        onChange={(e) => setNewStratSetup(e.target.value)}
+                        placeholder="Setup/Gatillo sugerido (opcional)"
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-blue-500"
+                      />
+                      <textarea
+                        value={newStratDesc}
+                        onChange={(e) => setNewStratDesc(e.target.value)}
+                        placeholder="Descripción de la lógica (opcional)"
+                        rows={2}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-[11px] text-zinc-100 focus:outline-none focus:border-blue-500 resize-none"
+                      />
+                    </div>
+                    <div className="flex items-center space-x-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleSaveInlineStrategy}
+                        className="flex-1 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded transition cursor-pointer"
+                      >
+                        Crear
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowInlineCreator(false)}
+                        className="flex-1 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-[10px] font-bold rounded transition cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Setup */}

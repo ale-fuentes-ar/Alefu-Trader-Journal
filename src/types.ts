@@ -71,3 +71,11 @@ export interface TradeBackup {
   tradeCount: number;
   description: string;
 }
+
+export interface Strategy {
+  id: string;
+  name: string;
+  description: string;
+  defaultSetup?: string;
+  createdAt?: string;
+}

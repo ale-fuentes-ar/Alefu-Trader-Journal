@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
-import { Trade, TradingGoal, ExchangeRate, TradeBackup } from './src/types.js';
+import { Trade, TradingGoal, ExchangeRate, TradeBackup, Strategy } from './src/types.js';
 
 dotenv.config();
 
@@ -23,6 +23,7 @@ const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const TRADES_FILE = path.join(DATA_DIR, 'trades.json');
 const GOALS_FILE = path.join(DATA_DIR, 'goals.json');
 const EXCHANGE_FILE = path.join(DATA_DIR, 'exchange_rates.json');
+const STRATEGIES_FILE = path.join(DATA_DIR, 'strategies.json');
 
 // Ensure dirs exist
 if (!fs.existsSync(DATA_DIR)) {
@@ -51,6 +52,14 @@ const DEFAULT_GOALS: TradingGoal[] = [
 ];
 
 const DEFAULT_TRADES: Trade[] = [];
+
+const DEFAULT_STRATEGIES: Strategy[] = [
+  { id: 's1', name: 'Pullback VWAP', description: 'Entrada a favor de la tendencia tras un retroceso ordenado a la media VWAP diaria o de sesión.', defaultSetup: 'Gatillo en Media Móvil / Vela de rechazo' },
+  { id: 's2', name: 'Rompimiento', description: 'Entrada de impulso cuando el precio supera una zona clave de soporte, resistencia o consolidación.', defaultSetup: 'Fallo de Máxima / Barra de ruptura con volumen' },
+  { id: 's3', name: 'Soporte y Resistencia', description: 'Operación de reversión o rebote en niveles horizontales de soporte o resistencia macro.', defaultSetup: 'Pinbar o vela envolvente' },
+  { id: 's4', name: 'Fading', description: 'Estrategia contraria para operar el agotamiento de un movimiento fuerte del mercado.', defaultSetup: 'Doble techo / divergencia oscilador' },
+  { id: 's5', name: 'Tendencia de Canal', description: 'Operar los rebotes ordenados dentro de las bandas o límites de un canal de tendencia activo.', defaultSetup: 'Tercer toque en directriz' }
+];
 
 // Load / Save Helpers
 function readJsonFile<T>(filePath: string, defaultValue: T): T {
@@ -106,6 +115,7 @@ function createAutomaticBackup() {
 let tradesList = readJsonFile<Trade[]>(TRADES_FILE, DEFAULT_TRADES);
 let goalsList = readJsonFile<TradingGoal[]>(GOALS_FILE, DEFAULT_GOALS);
 let ratesList = readJsonFile<ExchangeRate[]>(EXCHANGE_FILE, DEFAULT_RATES);
+let strategiesList = readJsonFile<Strategy[]>(STRATEGIES_FILE, DEFAULT_STRATEGIES);
 
 // API Routes
 app.get('/api/trades', (req, res) => {
@@ -190,6 +200,51 @@ app.post('/api/exchange-rates', (req, res) => {
   }
   writeJsonFile(EXCHANGE_FILE, ratesList);
   res.json(ratesList);
+});
+
+// Strategies API
+app.get('/api/strategies', (req, res) => {
+  strategiesList = readJsonFile<Strategy[]>(STRATEGIES_FILE, DEFAULT_STRATEGIES);
+  res.json(strategiesList);
+});
+
+app.post('/api/strategies', (req, res) => {
+  const newStrategy: Strategy = req.body;
+  if (!newStrategy.name) {
+    return res.status(400).json({ error: 'Name is required' });
+  }
+  if (!newStrategy.id) {
+    newStrategy.id = `s-${Date.now()}`;
+  }
+  newStrategy.createdAt = new Date().toISOString();
+  strategiesList.push(newStrategy);
+  writeJsonFile(STRATEGIES_FILE, strategiesList);
+  res.status(201).json(newStrategy);
+});
+
+app.put('/api/strategies/:id', (req, res) => {
+  const { id } = req.params;
+  const updatedData = req.body;
+  const index = strategiesList.findIndex(s => s.id === id);
+  if (index !== -1) {
+    strategiesList[index] = { ...strategiesList[index], ...updatedData };
+    writeJsonFile(STRATEGIES_FILE, strategiesList);
+    res.json(strategiesList[index]);
+  } else {
+    res.status(404).json({ error: 'Strategy not found' });
+  }
+});
+
+app.delete('/api/strategies/:id', (req, res) => {
+  const { id } = req.params;
+  const index = strategiesList.findIndex(s => s.id === id);
+  if (index !== -1) {
+    const deleted = strategiesList.splice(index, 1);
+    writeJsonFile(STRATEGIES_FILE, strategiesList);
+    res.json(deleted[0]);
+  } else {
+    res.status(404).json({ error: 'Strategy not found' });
+  }
 });
 
 // Backups API

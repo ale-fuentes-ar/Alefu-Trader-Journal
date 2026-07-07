@@ -16,12 +16,14 @@ import CalendarView from './components/CalendarView';
 import GoalsView from './components/GoalsView';
 import ImportView from './components/ImportView';
 import AICopilot from './components/AICopilot';
-import { Trade, TradingGoal } from './types';
+import StrategiesView from './components/StrategiesView';
+import { Trade, TradingGoal, Strategy } from './types';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'trades' | 'stats' | 'calendar' | 'goals' | 'import' | 'ai'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'trades' | 'stats' | 'calendar' | 'goals' | 'import' | 'ai' | 'strategies'>('dashboard');
   const [trades, setTrades] = useState<Trade[]>([]);
   const [goals, setGoals] = useState<TradingGoal[]>([]);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [usdToBrlRate, setUsdToBrlRate] = useState<number>(5.65); // Real-time exchange rate
   
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
@@ -51,6 +53,11 @@ export default function App() {
         const goalsRes = await fetch('/api/goals');
         const goalsData = await goalsRes.json();
         setGoals(goalsData || []);
+
+        // Load strategies
+        const strategiesRes = await fetch('/api/strategies');
+        const strategiesData = await strategiesRes.json();
+        setStrategies(strategiesData || []);
       } catch (err) {
         console.error('Error fetching data from API:', err);
       } finally {
@@ -125,6 +132,48 @@ export default function App() {
     } catch (err) {
       console.error(err);
     }
+  };
+
+  // Save or update strategy
+  const handleSaveStrategy = async (strategyData: Strategy): Promise<Strategy | null> => {
+    try {
+      const isEdit = !!strategyData.id && strategies.some(s => s.id === strategyData.id);
+      const url = isEdit ? `/api/strategies/${strategyData.id}` : '/api/strategies';
+      const method = isEdit ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(strategyData)
+      });
+
+      if (res.ok) {
+        const saved = await res.json();
+        if (isEdit) {
+          setStrategies(strategies.map(s => s.id === saved.id ? saved : s));
+        } else {
+          setStrategies([...strategies, saved]);
+        }
+        return saved;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    return null;
+  };
+
+  // Delete strategy
+  const handleDeleteStrategy = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/strategies/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setStrategies(strategies.filter(s => s.id !== id));
+        return true;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    return false;
   };
 
   // Import trades from files
@@ -283,6 +332,16 @@ export default function App() {
           <AICopilot />
         )}
 
+        {activeView === 'strategies' && (
+          <StrategiesView 
+            strategies={strategies}
+            trades={trades}
+            onSaveStrategy={handleSaveStrategy}
+            onDeleteStrategy={handleDeleteStrategy}
+            usdToBrlRate={usdToBrlRate}
+          />
+        )}
+
       </div>
 
       {/* Modal Popup Container for Trade Recording/Form */}
@@ -317,6 +376,8 @@ export default function App() {
                 onSave={handleSaveTrade} 
                 editingTrade={editingTrade || undefined} 
                 usdToBrlRate={usdToBrlRate}
+                strategies={strategies}
+                onSaveStrategy={handleSaveStrategy}
               />
             </div>
 
