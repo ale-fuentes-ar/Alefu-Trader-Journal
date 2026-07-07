@@ -149,6 +149,23 @@ export default function App() {
     }
   };
 
+  // Clear all trades
+  const handleClearAllTrades = async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/trades', { method: 'DELETE' });
+      if (res.ok) {
+        setTrades([]);
+        return true;
+      } else {
+        alert('No se pudo limpiar la base de datos.');
+        return false;
+      }
+    } catch (err) {
+      console.error(err);
+      return false;
+    }
+  };
+
   // Trigger manual Backup
   const handleManualBackup = async () => {
     try {
@@ -257,6 +274,7 @@ export default function App() {
         {activeView === 'import' && (
           <ImportView 
             onImportComplete={handleImportComplete}
+            onClearAllTrades={handleClearAllTrades}
             usdToBrlRate={usdToBrlRate}
           />
         )}

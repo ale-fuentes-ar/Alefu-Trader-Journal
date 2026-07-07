@@ -429,6 +429,12 @@ app.delete('/api/trades/:id', (req, res) => {
   }
 });
 
+app.delete('/api/trades', (req, res) => {
+  tradesList = [];
+  writeJsonFile(TRADES_FILE, tradesList);
+  res.json({ message: 'All trades deleted successfully' });
+});
+
 // Goals API
 app.get('/api/goals', (req, res) => {
   res.json(goalsList);

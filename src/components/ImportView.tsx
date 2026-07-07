@@ -13,6 +13,7 @@ import { Trade } from '../types';
 
 interface ImportViewProps {
   onImportComplete: (importedTrades: Trade[]) => void;
+  onClearAllTrades?: () => Promise<boolean>;
   usdToBrlRate: number;
 }
 
@@ -30,7 +31,7 @@ const SAMPLE_MT5_HTML = `<!-- MT5 Statement -->
   <tr><td>BTCUSD</td><td>sell</td><td>0.05</td><td>-75.00</td><td>2026-07-05 11:20:00</td></tr>
 </table>`;
 
-export default function ImportView({ onImportComplete, usdToBrlRate }: ImportViewProps) {
+export default function ImportView({ onImportComplete, onClearAllTrades, usdToBrlRate }: ImportViewProps) {
   const [platform, setPlatform] = useState<'ProfitPRO' | 'MT5'>('ProfitPRO');
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -387,6 +388,31 @@ export default function ImportView({ onImportComplete, usdToBrlRate }: ImportVie
                 <ArrowRight className="h-3 w-3" />
               </button>
             </div>
+
+            {/* Database Reset Panel */}
+            {onClearAllTrades && (
+              <div className="p-3 bg-zinc-950 rounded border border-rose-900/30 mt-4 space-y-2">
+                <span className="text-[9px] font-bold text-rose-400 font-mono uppercase tracking-wider block">REINICIAR DIARIO</span>
+                <p className="text-[10px] text-zinc-400">
+                  ¿Quieres borrar todas las operaciones de ejemplo para comenzar a usar el diario con tus propios datos reales?
+                </p>
+                
+                <button
+                  id="btn-clear-all-trades"
+                  onClick={async () => {
+                    if (confirm('¿Estás seguro de que deseas eliminar todas las operaciones registradas? Esta acción no se puede deshacer.')) {
+                      const success = await onClearAllTrades();
+                      if (success) {
+                        alert('Se han eliminado todas las operaciones con éxito.');
+                      }
+                    }
+                  }}
+                  className="w-full flex items-center justify-center space-x-1.5 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 font-bold py-1.5 rounded border border-rose-500/20 transition text-xs cursor-pointer"
+                >
+                  <span>Limpiar Todas las Operaciones</span>
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="p-2 bg-zinc-950 border border-zinc-800 rounded text-[9px] text-zinc-500 font-mono text-center">
