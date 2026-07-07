@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trader-copilot-app
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # - GEMINI_API_KEY=tu_api_key_aqui  # Descomenta y añade tu key si la usas
+    restart: unless-stopped
